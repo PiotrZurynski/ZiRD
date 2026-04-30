@@ -1,0 +1,485 @@
+#1
+CREATE OR REPLACE FUNCTION f_get_job_title (
+    p_job_id JOBS.JOB_ID%TYPE
+) RETURN JOBS.JOB_TITLE%TYPE AS
+    v_title JOBS.JOB_TITLE%TYPE;
+BEGIN
+    SELECT JOB_TITLE INTO v_title
+    FROM JOBS
+    WHERE JOB_ID = p_job_id;
+    
+    RETURN v_title;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Nie znaleziono pracy o ID: ' || p_job_id);
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20099, 'Błąd: ' || SQLERRM);
+END;
+/
+
+SELECT f_get_job_title('IT_PROG') FROM DUAL;
+
+#2
+CREATE OR REPLACE FUNCTION f_roczne_zarobki (
+    p_employee_id EMPLOYEES.EMPLOYEE_ID%TYPE
+) RETURN NUMBER AS
+    v_salary         EMPLOYEES.SALARY%TYPE;
+    v_commission_pct EMPLOYEES.COMMISSION_PCT%TYPE;
+BEGIN
+    SELECT SALARY, NVL(COMMISSION_PCT, 0)
+    INTO v_salary, v_commission_pct
+    FROM EMPLOYEES
+    WHERE EMPLOYEE_ID = p_employee_id;
+    
+    RETURN v_salary * 12 + v_salary * v_commission_pct;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Nie znaleziono pracownika o ID: ' || p_employee_id);
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20099, 'Błąd: ' || SQLERRM);
+END;
+/
+
+SELECT f_roczne_zarobki(100) FROM DUAL;
+
+
+#3
+CREATE OR REPLACE FUNCTION f_kierunkowy (
+    p_phone VARCHAR2
+) RETURN VARCHAR2 AS
+BEGIN
+    RETURN SUBSTR(p_phone, 1, INSTR(p_phone, '.') - 1);
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20003, 'Błąd parsowania numeru: ' || SQLERRM);
+END;
+/
+
+SELECT f_kierunkowy('515.123.4567') FROM DUAL;
+SELECT f_kierunkowy(PHONE_NUMBER) FROM EMPLOYEES WHERE ROWNUM <= 5;
+
+
+#4
+CREATE OR REPLACE FUNCTION f_pierwsza_ostatnia_wielka (
+    p_text VARCHAR2
+) RETURN VARCHAR2 AS
+    v_result VARCHAR2(1000);
+BEGIN
+    v_result := LOWER(p_text);
+    v_result := UPPER(SUBSTR(v_result, 1, 1))
+             || SUBSTR(v_result, 2, LENGTH(v_result) - 2)
+             || UPPER(SUBSTR(v_result, -1));
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20004, 'Błąd: ' || SQLERRM);
+END;
+/
+
+SELECT f_pierwsza_ostatnia_wielka('janKOWALSKI') FROM DUAL;
+
+#5
+CREATE OR REPLACE FUNCTION f_pesel_na_date (
+    p_pesel VARCHAR2
+) RETURN VARCHAR2 AS
+    v_rok    NUMBER;
+    v_miesiac NUMBER;
+    v_dzien  NUMBER;
+    v_rok_pelny NUMBER;
+BEGIN
+    v_rok     := TO_NUMBER(SUBSTR(p_pesel, 1, 2));
+    v_miesiac := TO_NUMBER(SUBSTR(p_pesel, 3, 2));
+    v_dzien   := TO_NUMBER(SUBSTR(p_pesel, 5, 2));
+
+    IF v_miesiac BETWEEN 21 AND 32 THEN
+        v_miesiac   := v_miesiac - 20;
+        v_rok_pelny := 2000 + v_rok;
+    ELSE
+        v_rok_pelny := 1900 + v_rok;
+    END IF;
+
+    RETURN TO_CHAR(v_rok_pelny, 'FM0000') || '-'
+        || LPAD(v_miesiac, 2, '0') || '-'
+        || LPAD(v_dzien, 2, '0');
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20005, 'Błąd parsowania PESEL: ' || SQLERRM);
+END;
+/
+SELECT f_pesel_na_date('90010112345') FROM DUAL;
+SELECT f_pesel_na_date('02210112345') FROM DUAL;
+
+#6
+CREATE OR REPLACE FUNCTION f_kraj_statystyki (
+    p_country_name COUNTRIES.COUNTRY_NAME%TYPE,
+    p_dept_count   OUT NUMBER
+) RETURN NUMBER AS
+    v_emp_count  NUMBER;
+    v_country_id COUNTRIES.COUNTRY_ID%TYPE;
+BEGIN
+    BEGIN
+        SELECT COUNTRY_ID INTO v_country_id
+        FROM COUNTRIES
+        WHERE UPPER(COUNTRY_NAME) = UPPER(p_country_name);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20006, 'Nie znaleziono kraju: ' || p_country_name);
+    END;
+
+    SELECT COUNT(DISTINCT e.EMPLOYEE_ID)
+    INTO v_emp_count
+    FROM EMPLOYEES e
+    JOIN DEPARTMENTS d ON e.DEPARTMENT_ID = d.DEPARTMENT_ID
+    JOIN LOCATIONS   l ON d.LOCATION_ID   = l.LOCATION_ID
+    WHERE l.COUNTRY_ID = v_country_id;
+
+    SELECT COUNT(DISTINCT d.DEPARTMENT_ID)
+    INTO p_dept_count
+    FROM DEPARTMENTS d
+    JOIN LOCATIONS l ON d.LOCATION_ID = l.LOCATION_ID
+    WHERE l.COUNTRY_ID = v_country_id;
+
+    RETURN v_emp_count;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20099, 'Błąd: ' || SQLERRM);
+END;
+/
+
+DECLARE
+    v_emp  NUMBER;
+    v_dept NUMBER;
+BEGIN
+    v_emp := f_kraj_statystyki('United States of America', v_dept);
+    DBMS_OUTPUT.PUT_LINE('Pracownicy: ' || v_emp || ', Departamenty: ' || v_dept);
+END;
+/
+
+
+
+
+
+#1
+CREATE TABLE ARCHIWUM_DEPARTAMENTOW (
+    ID              NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    NAZWA           VARCHAR2(100),
+    DATA_ZAMKNIECIA DATE,
+    OSTATNI_MANAGER VARCHAR2(100)
+);
+
+CREATE OR REPLACE TRIGGER trg_archiwum_dept
+AFTER DELETE ON DEPARTMENTS
+FOR EACH ROW
+DECLARE
+    v_manager_name VARCHAR2(100);
+BEGIN
+    BEGIN
+        SELECT FIRST_NAME || ' ' || LAST_NAME
+        INTO v_manager_name
+        FROM EMPLOYEES
+        WHERE EMPLOYEE_ID = :OLD.MANAGER_ID;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            v_manager_name := 'BRAK';
+    END;
+
+    INSERT INTO ARCHIWUM_DEPARTAMENTOW (NAZWA, DATA_ZAMKNIECIA, OSTATNI_MANAGER)
+    VALUES (:OLD.DEPARTMENT_NAME, SYSDATE, v_manager_name);
+END;
+/
+DELETE FROM DEPARTMENTS WHERE DEPARTMENT_ID = 290;
+SELECT * FROM ARCHIWUM_DEPARTAMENTOW;
+
+#2
+CREATE TABLE ZLODZIEJ (
+    ID          NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    UZYTKOWNIK  VARCHAR2(100),
+    CZAS_ZMIANY TIMESTAMP
+);
+
+CREATE OR REPLACE TRIGGER trg_kontrola_zarobkow
+BEFORE INSERT OR UPDATE OF SALARY ON EMPLOYEES
+FOR EACH ROW
+BEGIN
+    IF :NEW.SALARY < 2000 OR :NEW.SALARY > 26000 THEN
+        INSERT INTO ZLODZIEJ (UZYTKOWNIK, CZAS_ZMIANY)
+        VALUES (USER, SYSTIMESTAMP);
+
+        RAISE_APPLICATION_ERROR(-20010,
+            'Wynagrodzenie ' || :NEW.SALARY || ' poza zakresem 2000-26000. Operacja zablokowana.');
+    END IF;
+END;
+/
+
+UPDATE EMPLOYEES SET SALARY = 5000 WHERE EMPLOYEE_ID = 100;
+UPDATE EMPLOYEES SET SALARY = 50000 WHERE EMPLOYEE_ID = 100;
+SELECT * FROM ZLODZIEJ;
+
+#3
+CREATE SEQUENCE EMPLOYEES_SEQ
+    START WITH 300
+    INCREMENT BY 1
+    NOCACHE
+    NOCYCLE;
+
+CREATE OR REPLACE TRIGGER trg_employees_autoinc
+BEFORE INSERT ON EMPLOYEES
+FOR EACH ROW
+WHEN (NEW.EMPLOYEE_ID IS NULL)
+BEGIN
+    :NEW.EMPLOYEE_ID := EMPLOYEES_SEQ.NEXTVAL;
+END;
+/
+
+INSERT INTO EMPLOYEES (FIRST_NAME, LAST_NAME, EMAIL, HIRE_DATE, JOB_ID, SALARY)
+VALUES ('Test', 'Autoincrement', 'TAUTO', SYSDATE, 'IT_PROG', 5000);
+SELECT EMPLOYEE_ID FROM EMPLOYEES WHERE EMAIL = 'TAUTO';
+
+#4
+CREATE OR REPLACE TRIGGER trg_lock_job_grades
+BEFORE INSERT OR UPDATE OR DELETE ON JOB_GRADES
+BEGIN
+    RAISE_APPLICATION_ERROR(-20020,
+        'Operacja zabroniona na tabeli JOB_GRADES.');
+END;
+/
+
+INSERT INTO JOB_GRADES VALUES ('G', 1000, 2000);
+UPDATE JOB_GRADES SET MIN_SALARY = 999 WHERE GRADE = 'A';
+DELETE FROM JOB_GRADES WHERE GRADE = 'A';
+
+#5
+CREATE OR REPLACE TRIGGER trg_jobs_keep_salary
+BEFORE UPDATE OF MIN_SALARY, MAX_SALARY ON JOBS
+FOR EACH ROW
+BEGIN
+    :NEW.MIN_SALARY := :OLD.MIN_SALARY;
+    :NEW.MAX_SALARY := :OLD.MAX_SALARY;
+END;
+/
+
+UPDATE JOBS SET MIN_SALARY = 1, MAX_SALARY = 999999 WHERE JOB_ID = 'IT_PROG';
+SELECT MIN_SALARY, MAX_SALARY FROM JOBS WHERE JOB_ID = 'IT_PROG';
+
+
+#1
+-- SPECYFIKACJA
+CREATE OR REPLACE PACKAGE pkg_hr AS
+    -- Funkcje
+    FUNCTION f_get_job_title        (p_job_id       JOBS.JOB_ID%TYPE)           RETURN VARCHAR2;
+    FUNCTION f_roczne_zarobki       (p_employee_id  EMPLOYEES.EMPLOYEE_ID%TYPE) RETURN NUMBER;
+    FUNCTION f_kierunkowy           (p_phone        VARCHAR2)                   RETURN VARCHAR2;
+    FUNCTION f_pierwsza_ostatnia_wielka (p_text     VARCHAR2)                   RETURN VARCHAR2;
+    FUNCTION f_pesel_na_date        (p_pesel        VARCHAR2)                   RETURN VARCHAR2;
+
+    -- Procedury z ćw. 5
+    PROCEDURE p_add_job             (p_job_id JOBS.JOB_ID%TYPE, p_job_title JOBS.JOB_TITLE%TYPE);
+    PROCEDURE p_update_job          (p_job_id JOBS.JOB_ID%TYPE, p_new_job_title JOBS.JOB_TITLE%TYPE);
+    PROCEDURE p_delete_job          (p_job_id JOBS.JOB_ID%TYPE);
+    PROCEDURE p_get_employee_info   (p_employee_id IN EMPLOYEES.EMPLOYEE_ID%TYPE,
+                                     p_last_name   OUT EMPLOYEES.LAST_NAME%TYPE,
+                                     p_salary      OUT EMPLOYEES.SALARY%TYPE);
+END pkg_hr;
+/
+
+-- CIAŁO
+CREATE OR REPLACE PACKAGE BODY pkg_hr AS
+
+    FUNCTION f_get_job_title (p_job_id JOBS.JOB_ID%TYPE) RETURN VARCHAR2 AS
+        v_title JOBS.JOB_TITLE%TYPE;
+    BEGIN
+        SELECT JOB_TITLE INTO v_title FROM JOBS WHERE JOB_ID = p_job_id;
+        RETURN v_title;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20001, 'Brak pracy: ' || p_job_id);
+    END;
+
+    FUNCTION f_roczne_zarobki (p_employee_id EMPLOYEES.EMPLOYEE_ID%TYPE) RETURN NUMBER AS
+        v_sal EMPLOYEES.SALARY%TYPE;
+        v_com EMPLOYEES.COMMISSION_PCT%TYPE;
+    BEGIN
+        SELECT SALARY, NVL(COMMISSION_PCT,0) INTO v_sal, v_com
+        FROM EMPLOYEES WHERE EMPLOYEE_ID = p_employee_id;
+        RETURN v_sal * 12 + v_sal * v_com;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Brak pracownika: ' || p_employee_id);
+    END;
+
+    FUNCTION f_kierunkowy (p_phone VARCHAR2) RETURN VARCHAR2 AS
+    BEGIN
+        RETURN SUBSTR(p_phone, 1, INSTR(p_phone, '.') - 1);
+    END;
+
+    FUNCTION f_pierwsza_ostatnia_wielka (p_text VARCHAR2) RETURN VARCHAR2 AS
+        v_result VARCHAR2(1000);
+    BEGIN
+        v_result := LOWER(p_text);
+        v_result := UPPER(SUBSTR(v_result, 1, 1))
+                 || SUBSTR(v_result, 2, LENGTH(v_result) - 2)
+                 || UPPER(SUBSTR(v_result, -1));
+        RETURN v_result;
+    END;
+
+    FUNCTION f_pesel_na_date (p_pesel VARCHAR2) RETURN VARCHAR2 AS
+        v_rok NUMBER; v_m NUMBER; v_d NUMBER; v_y NUMBER;
+    BEGIN
+        v_rok := TO_NUMBER(SUBSTR(p_pesel,1,2));
+        v_m   := TO_NUMBER(SUBSTR(p_pesel,3,2));
+        v_d   := TO_NUMBER(SUBSTR(p_pesel,5,2));
+        IF v_m BETWEEN 21 AND 32 THEN v_m := v_m - 20; v_y := 2000 + v_rok;
+        ELSE v_y := 1900 + v_rok; END IF;
+        RETURN TO_CHAR(v_y,'FM0000')||'-'||LPAD(v_m,2,'0')||'-'||LPAD(v_d,2,'0');
+    END;
+
+    PROCEDURE p_add_job (p_job_id JOBS.JOB_ID%TYPE, p_job_title JOBS.JOB_TITLE%TYPE) AS
+    BEGIN
+        INSERT INTO JOBS (JOB_ID, JOB_TITLE) VALUES (p_job_id, p_job_title);
+        COMMIT;
+    EXCEPTION
+        WHEN OTHERS THEN DBMS_OUTPUT.PUT_LINE('BŁĄD: ' || SQLERRM);
+    END;
+
+    PROCEDURE p_update_job (p_job_id JOBS.JOB_ID%TYPE, p_new_job_title JOBS.JOB_TITLE%TYPE) AS
+    BEGIN
+        UPDATE JOBS SET JOB_TITLE = p_new_job_title WHERE JOB_ID = p_job_id;
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20001, 'No Jobs updated: ' || p_job_id);
+        END IF;
+        COMMIT;
+    EXCEPTION
+        WHEN OTHERS THEN DBMS_OUTPUT.PUT_LINE('BŁĄD: ' || SQLERRM);
+    END;
+
+    PROCEDURE p_delete_job (p_job_id JOBS.JOB_ID%TYPE) AS
+    BEGIN
+        DELETE FROM JOBS WHERE JOB_ID = p_job_id;
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20002, 'No Jobs deleted: ' || p_job_id);
+        END IF;
+        COMMIT;
+    EXCEPTION
+        WHEN OTHERS THEN DBMS_OUTPUT.PUT_LINE('BŁĄD: ' || SQLERRM);
+    END;
+
+    PROCEDURE p_get_employee_info (
+        p_employee_id IN  EMPLOYEES.EMPLOYEE_ID%TYPE,
+        p_last_name   OUT EMPLOYEES.LAST_NAME%TYPE,
+        p_salary      OUT EMPLOYEES.SALARY%TYPE
+    ) AS
+    BEGIN
+        SELECT LAST_NAME, SALARY INTO p_last_name, p_salary
+        FROM EMPLOYEES WHERE EMPLOYEE_ID = p_employee_id;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            DBMS_OUTPUT.PUT_LINE('Brak pracownika: ' || p_employee_id);
+    END;
+
+END pkg_hr;
+/
+
+SELECT pkg_hr.f_get_job_title('IT_PROG') FROM DUAL;
+SELECT pkg_hr.f_roczne_zarobki(100) FROM DUAL;
+
+#2
+CREATE OR REPLACE PACKAGE pkg_regions AS
+    PROCEDURE p_get_by_id     (p_region_id   IN  REGIONS.REGION_ID%TYPE,
+                                p_region_name OUT REGIONS.REGION_NAME%TYPE);
+    PROCEDURE p_get_by_name   (p_region_name IN  REGIONS.REGION_NAME%TYPE,
+                                p_region_id   OUT REGIONS.REGION_ID%TYPE);
+    PROCEDURE p_get_all;
+    PROCEDURE p_insert        (p_region_id   REGIONS.REGION_ID%TYPE,
+                                p_region_name REGIONS.REGION_NAME%TYPE);
+    PROCEDURE p_update        (p_region_id   REGIONS.REGION_ID%TYPE,
+                                p_region_name REGIONS.REGION_NAME%TYPE);
+    PROCEDURE p_delete        (p_region_id   REGIONS.REGION_ID%TYPE);
+END pkg_regions;
+/
+
+CREATE OR REPLACE PACKAGE BODY pkg_regions AS
+
+    PROCEDURE p_get_by_id (
+        p_region_id   IN  REGIONS.REGION_ID%TYPE,
+        p_region_name OUT REGIONS.REGION_NAME%TYPE
+    ) AS
+    BEGIN
+        SELECT REGION_NAME INTO p_region_name
+        FROM REGIONS WHERE REGION_ID = p_region_id;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20030, 'Brak regionu o ID: ' || p_region_id);
+    END;
+
+    PROCEDURE p_get_by_name (
+        p_region_name IN  REGIONS.REGION_NAME%TYPE,
+        p_region_id   OUT REGIONS.REGION_ID%TYPE
+    ) AS
+    BEGIN
+        SELECT REGION_ID INTO p_region_id
+        FROM REGIONS WHERE UPPER(REGION_NAME) = UPPER(p_region_name);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20031, 'Brak regionu o nazwie: ' || p_region_name);
+    END;
+
+    PROCEDURE p_get_all AS
+    BEGIN
+        FOR rec IN (SELECT REGION_ID, REGION_NAME FROM REGIONS ORDER BY REGION_ID) LOOP
+            DBMS_OUTPUT.PUT_LINE(rec.REGION_ID || ' | ' || rec.REGION_NAME);
+        END LOOP;
+    END;
+
+    PROCEDURE p_insert (
+        p_region_id   REGIONS.REGION_ID%TYPE,
+        p_region_name REGIONS.REGION_NAME%TYPE
+    ) AS
+    BEGIN
+        INSERT INTO REGIONS (REGION_ID, REGION_NAME) VALUES (p_region_id, p_region_name);
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('Dodano region: ' || p_region_name);
+    EXCEPTION
+        WHEN DUP_VAL_ON_INDEX THEN
+            RAISE_APPLICATION_ERROR(-20032, 'Region o tym ID już istnieje.');
+        WHEN OTHERS THEN
+            RAISE_APPLICATION_ERROR(-20099, 'Błąd: ' || SQLERRM);
+    END;
+
+    PROCEDURE p_update (
+        p_region_id   REGIONS.REGION_ID%TYPE,
+        p_region_name REGIONS.REGION_NAME%TYPE
+    ) AS
+    BEGIN
+        UPDATE REGIONS SET REGION_NAME = p_region_name WHERE REGION_ID = p_region_id;
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20033, 'Brak regionu do aktualizacji: ' || p_region_id);
+        END IF;
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('Zaktualizowano region: ' || p_region_id);
+    END;
+
+    PROCEDURE p_delete (p_region_id REGIONS.REGION_ID%TYPE) AS
+    BEGIN
+        DELETE FROM REGIONS WHERE REGION_ID = p_region_id;
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20034, 'Brak regionu do usunięcia: ' || p_region_id);
+        END IF;
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('Usunięto region: ' || p_region_id);
+    END;
+
+END pkg_regions;
+/
+
+EXEC pkg_regions.p_get_all;
+EXEC pkg_regions.p_insert(10, 'Test Region');
+
+DECLARE v_name REGIONS.REGION_NAME%TYPE;
+BEGIN
+    pkg_regions.p_get_by_id(10, v_name);
+    DBMS_OUTPUT.PUT_LINE('Nazwa: ' || v_name);
+END;
+/
+
+EXEC pkg_regions.p_update(10, 'Updated Region');
+EXEC pkg_regions.p_delete(10);
